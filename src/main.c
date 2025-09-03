@@ -1,9 +1,12 @@
 #include <SDL3/SDL_main.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include "audio.h"
 #include "chip8.h"
+#include "debug.h"
 #include "keyboard.h"
 #include "video.h"
 
@@ -16,12 +19,27 @@
 #define TIMER_HZ 60
 #define TIMER_INTERVAL_MS (1000 / TIMER_HZ)
 
+typedef enum {
+    RUNNING,
+    STEP_ONCE,
+    PAUSED
+} exec_mode_t;
+static exec_mode_t exec_mode = RUNNING;
+
+static bool is_debug = false;
+
 void cleanup(void);
 
 int main(int argc, char* argv[]) {
+    // Check for debug flag
+    // TODO: Improve argument parsing
+    if (argc > 2 && strcmp(argv[2], "--debug") == 0) {
+        is_debug = true;
+    }
+
     // Check if a ROM file was provided
     if (argc < 2) {
-        printf("Usage: %s <ROM>\n", argv[0]);
+        printf("Usage: %s <ROM> [--debug]\n", argv[0]);
         return EXIT_FAILURE;
     }
 
@@ -56,26 +74,45 @@ int main(int argc, char* argv[]) {
                 return EXIT_SUCCESS;
             }
 
+            // Emulator controls
+            if (is_debug && event.type == SDL_EVENT_KEY_DOWN) {
+                if (event.key.scancode == SDL_SCANCODE_P) {
+                    exec_mode = exec_mode == RUNNING ? PAUSED : RUNNING;
+                }
+                if (event.key.scancode == SDL_SCANCODE_N && exec_mode == PAUSED) {
+                    exec_mode = STEP_ONCE;
+                }
+            }
+
             if (event.type == SDL_EVENT_KEY_DOWN || event.type == SDL_EVENT_KEY_UP) {
                 handle_key_event(&event, &chip8);
+                if (is_debug) debug_handle_key_event(&event, &chip8);
             }
         }
 
         // Execute instructions for the current frame
         for (int i = 0; i < INSTRUCTIONS_PER_FRAME; i++) {
-            step_chip8(&chip8);
-        }
+            if (exec_mode == PAUSED) break;
 
-        // Try updating video and audio
-        if (!video_update(&chip8) || !audio_update(&chip8)) {
-            cleanup();
-            return EXIT_FAILURE;
+            step_chip8(&chip8);
+            if (exec_mode == STEP_ONCE) exec_mode = PAUSED;
         }
 
         // Update timers if needed
         if (current_time - last_timer_update >= TIMER_INTERVAL_MS) {
             step_chip8_timer(&chip8);
             last_timer_update = current_time;
+        }
+
+        // Update debugger if needed
+        if (is_debug) {
+            debug_update(&chip8);
+        }
+
+        // Try updating video and audio
+        if (!video_update(&chip8) || !audio_update(&chip8)) {
+            cleanup();
+            return EXIT_FAILURE;
         }
 
         // Wait for the next frame if the current frame completed too quickly
